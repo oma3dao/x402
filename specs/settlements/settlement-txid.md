@@ -136,7 +136,7 @@ v2 uses the same fields as v1 with the following differences:
 | `outputSchema`      | Removed from payment requirements                                                           |
 | `maxTimeoutSeconds` | Now Required (was Optional in v1)                                                           |
 
-**Note on `maxTimeoutSeconds`**: For TXID settlement, `maxTimeoutSeconds` is an advisory payment offer lifetime and is not cryptographically enforced, because the resource server does not commit to the quoted terms on-chain or via signature. It indicates the window during which the client can reasonably expect the quoted terms to remain valid; after this window, the resource server MAY reject the payment proof if pricing or policy has changed.
+**Note on `maxTimeoutSeconds`**: For TXID settlement, `maxTimeoutSeconds` is an advisory payment offer lifetime and is not cryptographically enforced, because the resource server does not commit to the quoted terms on-chain or via signature. It indicates the window during which the client can reasonably expect the quoted terms to remain valid; after this window, the resource server MAY reject the payment proof if pricing or policy has changed.  Future extensions could introduce signed offers.
 
 **3.3 TXID Payment Payload (Client → Server)**
 
@@ -437,6 +437,8 @@ x402 Payment Proof\n<JCS(signing object)>
 
 **Verification**: Use Ed25519 signature verification with the public key derived from `from`.
 
+Although the signing object is not transmitted verbatim, it is fully and deterministically derived from fields already present in the message, consistent with established protocol patterns such as EIP-712 and TLS transcript signing.
+
 **3.5 Payload Verification**
 
 When a resource server receives a TXID payment proof from a client, it MUST perform the facilitator verification procedure (described below) before delivering the requested service. The resource server SHOULD implement this verification by interfacing with a **facilitator service**. x402 defines two REST APIs for facilitators and this section describes how these APIs can be used with TXID settlement:
@@ -569,7 +571,7 @@ The verification implementation performs the following steps. The `paymentRequir
 6. **Fetch and validate the on-chain transaction**
    - Locate the transaction identified by `paymentPayload.payload.txRef`
    - Transaction MUST be confirmed to the required confirmation depth
-   - Transaction payer/authority (e.g., `tx.from` on EVM, fee payer or equivalent on other networks) MUST match`paymentPayload.payload.from`
+   - Transaction payer/authority (e.g., `tx.from` on EVM, or the equivalent payer/authority account on other networks) MUST match`paymentPayload.payload.from`
 
 7. **Validate the payment transfer against payment terms**
    - Transaction MUST have transferred at least the amount specified in `paymentRequirements.maxAmountRequired` (v1) or `accepted.amount` (v2)
@@ -580,6 +582,8 @@ The verification implementation performs the following steps. The `paymentRequir
 8. **Mark txRef as consumed**
    - If all checks pass, mark the reserved `txRef` as permanently consumed
    - The `txRef` record is subject to the retention policy
+   
+TXID settlement deliberately leaves finality determination to the resource server; implementations MUST define and apply a network-specific confirmation or finality policy before delivering service.
 
 **3.5.1.4 /verify Response**
 
