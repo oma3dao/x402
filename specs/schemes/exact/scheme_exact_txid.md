@@ -1,21 +1,25 @@
-# TXID Payment Payload Specification
+# Scheme: `exact` — AssetTransferMethod: `txid`
 
-**1. Overview**
+## Summary
 
-TXID is a payment payload type for x402 that enables payments using **any transferable asset on any blockchain**, without requiring the asset to implement a specialized "transfer-with-authorization" or permit interface.
+The `txid` asset transfer method enables x402 payments using **any transferable asset on any blockchain**, without requiring the asset to implement a specialized "transfer-with-authorization" or permit interface.
 
-In TXID settlement, the payer executes an on-chain transfer directly using the native transaction mechanics of the underlying network. The client then proves payment to the resource server by presenting:
+Unlike EIP-3009 and Permit2 — where the facilitator submits the on-chain transaction — with TXID the payer executes the on-chain transfer directly. The client then proves payment to the resource server by presenting:
 
 - a **transaction reference** (`txRef`) identifying the on-chain transfer, and
 - a **payer signature** demonstrating that the entity requesting the resource controls the account that funded the transaction.
 
-This payment payload type allows x402 to support:
+| AssetTransferMethod | Use Case                                                        | Notes                                           |
+| :------------------ | :-------------------------------------------------------------- | :---------------------------------------------- |
+| **txid**            | Any transferable asset on any blockchain. Client prepays.       | No facilitator gas. Supports native tokens.     |
+
+This asset transfer method allows x402 to support:
 
 - tokens and native assets that do not implement standardized authorization-based transfer interfaces,
 - non-EVM chains and heterogeneous execution environments,
 - payment flows where the payer submits the transaction and pays network fees directly, including with the native token of the chain, although existing gas subsidy tools can still be used.
 
-TXID settlement deliberately shifts responsibility from protocol-enforced guarantees to facilitator-side correctness. In exchange for supporting payments in any transferable asset on any chain, TXID requires facilitators to correctly implement additional verification and state-management logic. Unlike facilitated signed-transfer settlements—where replay protection for fund movement is enforced by on-chain mechanisms, TXID requires facilitators to enforce replay protection for **service delivery**. This includes:
+TXID deliberately shifts responsibility from protocol-enforced guarantees to facilitator-side correctness. In exchange for supporting payments in any transferable asset on any chain, TXID requires facilitators to correctly implement additional verification and state-management logic. Unlike facilitator-submitted asset transfer methods — where replay protection for fund movement is enforced by on-chain mechanisms — TXID requires facilitators to enforce replay protection for **service delivery**. This includes:
 
 - maintaining persistent state to de-duplicate accepted transaction references,
 - aligning transaction acceptance rules with transaction-reference retention policies.
@@ -25,25 +29,13 @@ In return, TXID enables resource servers to accept payments for assets that do n
 - native assets of a chain (e.g. ETH),
 - tokens without permit or transfer-with-authorization functionality.
 
-**2. Payload Type Discriminator**
+---
 
-TXID payloads are identified by the `type` field within the `payload` object:
+## 1. Payment Requirements (Server → Client)
 
-```
-payload.type = "txid"
-```
+When a resource server accepts payment via TXID, it responds with payment requirements containing `extra.assetTransferMethod: "txid"`.
 
-This explicit discriminator allows facilitators to route verification logic without inspecting payload shape or guessing based on field presence. The `scheme` field (e.g., `"exact"`) identifies the payment method family, while `payload.type` specifies the exact proof mechanism.
-
-**3. Protocol Integration**
-
-This section describes how TXID is represented within x402 message structures. TXID is compatible with both x402 v1 and v2 protocols.
-
-**3.1 Payment Requirements (Server → Client)**
-
-When a resource server requires payment via TXID, it responds with payment requirements containing TXID-specific fields.
-
-**3.1.1 x402 v1 Payment Requirements Example**
+### 1.1 x402 v1 Payment Requirements Example
 
 ```json
 {
@@ -60,15 +52,16 @@ When a resource server requires payment via TXID, it responds with payment requi
       "description": "Access to premium market data",
       "mimeType": "application/json",
       "outputSchema": null,
-      "maxTimeoutSeconds": 60
+      "maxTimeoutSeconds": 60,
+      "extra": {
+        "assetTransferMethod": "txid"
+      }
     }
   ]
 }
 ```
 
-**3.1.2 x402 v2 Payment Requirements Example**
-
-In v2, the resource information is separated into a top-level `resource` object, network identifiers use CAIP-2 format, and the amount field is renamed:
+### 1.2 x402 v2 Payment Requirements Example
 
 ```json
 {
@@ -86,20 +79,23 @@ In v2, the resource information is separated into a top-level `resource` object,
       "amount": "10000",
       "asset": "native",
       "payTo": "0x209693Bc6afc0C5328bA36FaF03C514EF312287C",
-      "maxTimeoutSeconds": 60
+      "maxTimeoutSeconds": 60,
+      "extra": {
+        "assetTransferMethod": "txid"
+      }
     }
   ],
   "extensions": {}
 }
 ```
 
-**3.1.3 TXID Payment Requirements Fields (v1)**
+### 1.3 Payment Requirements Fields (v1)
 
 | Field Name          | Type     | Required | Description                                                              |
 | ------------------- | -------- | -------- | ------------------------------------------------------------------------ |
 | `scheme`            | `string` | Required | Payment scheme identifier (e.g., "exact")                                |
 | `network`           | `string` | Required | Blockchain network identifier (e.g., "base-sepolia", "eip155:1")         |
-| `maxAmountRequired` | `string` | Required | Required payment amount in atomic token units (e.g.- Wei or Lamport)     |
+| `maxAmountRequired` | `string` | Required | Required payment amount in atomic token units (e.g., Wei or Lamport)     |
 | `asset`             | `string` | Required | Token contract address, or "native" for the native token of "network"    |
 | `payTo`             | `string` | Required | Recipient wallet address for the payment                                 |
 | `resource`          | `string` | Required | URL of the protected resource                                            |
@@ -107,9 +103,9 @@ In v2, the resource information is separated into a top-level `resource` object,
 | `mimeType`          | `string` | Optional | MIME type of the expected response                                       |
 | `outputSchema`      | `object` | Optional | JSON schema describing the response format                               |
 | `maxTimeoutSeconds` | `number` | Optional | Maximum time allowed for payment completion (payment offer expiration)   |
-| `extra`             | `object` | Optional | Scheme-specific additional information                                   |
+| `extra`             | `object` | Required | Must contain `assetTransferMethod: "txid"`                               |
 
-**3.1.4 TXID Payment Requirements Fields (v2 Differences)**
+### 1.4 Payment Requirements Fields (v2 Differences)
 
 v2 uses the same fields as v1 with the following differences:
 
@@ -123,15 +119,17 @@ v2 uses the same fields as v1 with the following differences:
 | `outputSchema`      | Removed from payment requirements                                                           |
 | `maxTimeoutSeconds` | Now Required (was Optional in v1)                                                           |
 
-**Note on `maxTimeoutSeconds`**: For TXID, `maxTimeoutSeconds` indicates the window during which the client can reasonably expect the quoted terms to remain valid.
+**Note on `maxTimeoutSeconds`**: For TXID, `maxTimeoutSeconds` is an advisory payment offer lifetime and is not cryptographically enforced, because the resource server does not commit to the quoted terms on-chain or via signature. It indicates the window during which the client can reasonably expect the quoted terms to remain valid; after this window, the resource server MAY reject the payment proof if pricing or policy has changed. Future extensions could introduce signed offers.
 
-**3.2 TXID Payment Payload (Client → Server)**
+---
+
+## 2. Payment Payload (Client → Server)
 
 For TXID, the client returns a payment proof containing the transaction reference and a signature binding it to the payment terms.
 
-**3.2.1 x402 v1**
+### 2.1 x402 v1
 
-**3.2.1.1 Payment Payload Fields (v1)**
+#### 2.1.1 Payment Payload Fields (v1)
 
 | Field Name    | Type     | Required | Description                                                              |
 | ------------- | -------- | -------- | ------------------------------------------------------------------------ |
@@ -146,7 +144,7 @@ The `payload` field for v1 contains:
 
 | Field Name            | Type     | Required | Description                                                             |
 | --------------------- | -------- | -------- | ----------------------------------------------------------------------- |
-| `type`                | `string` | Required | Payload type discriminator (`"txid"`)                                   |
+| `type`                | `string` | Required | Proof type (`"payment-proof"` for TXID)                                 |
 | `alg`                 | `string` | Required | Cryptographic algorithm used for signing (e.g., "ES256K", "Ed25519")    |
 | `format`              | `string` | Required | Signing convention/serialization (e.g., "eip712", "solana-signmessage") |
 | `txRef`               | `string` | Required | Transaction reference linking to the on-chain payment                   |
@@ -154,7 +152,7 @@ The `payload` field for v1 contains:
 | `offer`               | `object` | Required | The PaymentRequirements object as defined in Verify Request Example (v1)|
 | `signature`           | `string` | Required | Serialized signature over `txRef` and `paymentRequirements`             |
 
-The 'signature' field is the result of the 'from' private key signing the following object (see Signature Binding for encoding details):
+The `signature` field is the result of the `from` private key signing the following object (see Signature Binding for encoding details):
 
 ```json
 {
@@ -164,7 +162,7 @@ The 'signature' field is the result of the 'from' private key signing the follow
 }
 ```
 
-**3.2.1.2 Payment Payload Example (v1)**
+#### 2.1.2 Payment Payload Example (v1)
 
 ```json
 {
@@ -172,7 +170,7 @@ The 'signature' field is the result of the 'from' private key signing the follow
   "scheme": "exact",
   "network": "eip155:1",
   "payload": {
-    "type": "txid",
+    "type": "payment-proof",
     "alg": "ES256K",
     "format": "eip712",
     "txRef": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
@@ -186,18 +184,21 @@ The 'signature' field is the result of the 'from' private key signing the follow
       "mimeType": "application/json",
       "payTo": "0x209693Bc6afc0C5328bA36FaF03C514EF312287C",
       "maxTimeoutSeconds": 60,
-      "asset": "native"
+      "asset": "native",
+      "extra": {
+        "assetTransferMethod": "txid"
+      }
     },
     "signature": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef01"
   }
 }
 ```
 
-**3.2.2 x402 v2**
+### 2.2 x402 v2
 
-In v2, the payment proof payload is minimal—it contains only `txRef`, `from`, and `signature`. The `resource` and `accepted` fields are already present at the top level of the payment payload (per base x402 v2), so they are not duplicated inside the proof.
+In v2, the payment proof payload is minimal — it contains only `txRef`, `from`, and `signature`. The `resource` and `accepted` fields are already present at the top level of the payment payload (per base x402 v2), so they are not duplicated inside the proof.
 
-**3.2.2.1 Payment Payload Fields (v2 Differences)**
+#### 2.2.1 Payment Payload Fields (v2 Differences)
 
 v2 restructures the payment payload with the following differences:
 
@@ -213,14 +214,14 @@ The `payload` field for v2 contains:
 
 | Field Name            | Type     | Required | Description                                                             |
 | --------------------- | -------- | -------- | ----------------------------------------------------------------------- |
-| `type`                | `string` | Required | Payload type discriminator (`"txid"`)                                   |
+| `type`                | `string` | Required | Proof type (`"payment-proof"` for TXID)                                 |
 | `alg`                 | `string` | Required | Cryptographic algorithm used for signing (e.g., "ES256K", "Ed25519")    |
 | `format`              | `string` | Required | Signing convention/serialization (e.g., "eip712", "solana-signmessage") |
 | `txRef`               | `string` | Required | Transaction reference linking to the on-chain payment                   |
 | `from`                | `string` | Required | Payer's wallet address                                                  |
 | `signature`           | `string` | Required | Serialized signature over `txRef` and `paymentRequirements`             |
 
-The 'signature' field is the result of the 'from' private key signing the following object (see Signature Binding for encoding details):
+The `signature` field is the result of the `from` private key signing the following object (see Signature Binding for encoding details):
 
 ```json
 {
@@ -231,7 +232,7 @@ The 'signature' field is the result of the 'from' private key signing the follow
 }
 ```
 
-**3.2.2.2 Payment Payload Example (v2)**
+#### 2.2.2 Payment Payload Example (v2)
 
 ```json
 {
@@ -247,10 +248,13 @@ The 'signature' field is the result of the 'from' private key signing the follow
     "amount": "10000",
     "asset": "native",
     "payTo": "0x209693Bc6afc0C5328bA36FaF03C514EF312287C",
-    "maxTimeoutSeconds": 60
+    "maxTimeoutSeconds": 60,
+    "extra": {
+      "assetTransferMethod": "txid"
+    }
   },
   "payload": {
-    "type": "txid",
+    "type": "payment-proof",
     "alg": "ES256K",
     "format": "eip712",
     "txRef": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
@@ -261,13 +265,17 @@ The 'signature' field is the result of the 'from' private key signing the follow
 }
 ```
 
-**3.3 Signature Binding**
+---
+
+## 3. Signature Binding
 
 For TXID, the client MUST include a payer signature that cryptographically commits to the transaction reference and the payment terms. The signing object differs between v1 and v2.
 
 Including `from` in the signing object prevents identity substitution and ensures the signature is bound to the payer account referenced by the on-chain transaction.
 
-**3.3.1 Supported Signature Formats**
+Signing objects MUST contain only the fields defined in this specification for the applicable version and format.
+
+### 3.1 Supported Signature Formats
 
 The `format` field specifies how the signing object is encoded and signed. The required format is determined by the network's virtual machine type:
 
@@ -278,7 +286,7 @@ The `format` field specifies how the signing object is encoded and signed. The r
 
 Clients MUST use the format corresponding to the `network` specified in the payment requirements. Facilitators MUST reject payment proofs that use an incorrect format for the network.
 
-**3.3.2 Canonicalization**
+### 3.2 Canonicalization
 
 Implementations MUST use deterministic canonicalization when signing. The canonicalization method depends on the signing format:
 
@@ -289,7 +297,7 @@ Implementations MUST use deterministic canonicalization when signing. The canoni
 
 **Important**: EIP-712 provides its own deterministic canonicalization and domain separation. JSON canonicalization (RFC 8785 / JCS) MUST NOT be applied when using EIP-712. The two signing paths are distinct and MUST NOT be combined.
 
-**3.3.2.1 EIP-712 (Ethereum Structured Data Signing)**
+#### 3.2.1 EIP-712 (Ethereum Structured Data Signing)
 
 **Format identifier**: `"eip712"`
 
@@ -320,6 +328,7 @@ Implementations MUST use deterministic canonicalization when signing. The canoni
     ],
     Offer: [
       { name: "scheme", type: "string" },
+      { name: "assetTransferMethod", type: "string" },
       { name: "network", type: "string" },
       { name: "maxAmountRequired", type: "string" },
       { name: "asset", type: "string" },
@@ -362,6 +371,7 @@ Implementations MUST use deterministic canonicalization when signing. The canoni
     ],
     Accepted: [
       { name: "scheme", type: "string" },
+      { name: "assetTransferMethod", type: "string" },
       { name: "network", type: "string" },
       { name: "amount", type: "string" },
       { name: "asset", type: "string" },
@@ -383,7 +393,65 @@ Implementations MUST use deterministic canonicalization when signing. The canoni
 
 **Verification**: Use EIP-712 typed data hashing and ECDSA signature verification. Support EIP-1271 for smart contract wallets.
 
-**3.3.2.2 Solana signMessage (JCS-based)**
+**Complete EIP-712 Example (v2, with populated values):**
+
+```javascript
+{
+  domain: {
+    name: "x402 Payment Proof",
+    version: "1",
+    chainId: 1
+  },
+  types: {
+    EIP712Domain: [
+      { name: "name", type: "string" },
+      { name: "version", type: "string" },
+      { name: "chainId", type: "uint256" }
+    ],
+    PaymentProof: [
+      { name: "txRef", type: "string" },
+      { name: "from", type: "address" },
+      { name: "resource", type: "Resource" },
+      { name: "accepted", type: "Accepted" }
+    ],
+    Resource: [
+      { name: "url", type: "string" },
+      { name: "description", type: "string" },
+      { name: "mimeType", type: "string" }
+    ],
+    Accepted: [
+      { name: "scheme", type: "string" },
+      { name: "assetTransferMethod", type: "string" },
+      { name: "network", type: "string" },
+      { name: "amount", type: "string" },
+      { name: "asset", type: "string" },
+      { name: "payTo", type: "address" },
+      { name: "maxTimeoutSeconds", type: "uint256" }
+    ]
+  },
+  primaryType: "PaymentProof",
+  message: {
+    txRef: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+    from: "0x857b06519E91e3A54538791bDbb0E22373e36b66",
+    resource: {
+      url: "https://api.example.com/premium-data",
+      description: "Access to premium market data",
+      mimeType: "application/json"
+    },
+    accepted: {
+      scheme: "exact",
+      assetTransferMethod: "txid",
+      network: "eip155:1",
+      amount: "10000",
+      asset: "native",
+      payTo: "0x209693Bc6afc0C5328bA36FaF03C514EF312287C",
+      maxTimeoutSeconds: 60
+    }
+  }
+}
+```
+
+#### 3.2.2 Solana signMessage (JCS-based)
 
 **Format identifier**: `"solana-signmessage"`
 
@@ -400,7 +468,7 @@ x402 Payment Proof\n<JCS(signing object)>
 {
   "txRef": "<txRef>",
   "from": "<from address>",
-  "offer": { /* the offer/paymentRequirements object */ }
+  "offer": { /* the offer/paymentRequirements object, including extra.assetTransferMethod */ }
 }
 ```
 
@@ -410,7 +478,7 @@ x402 Payment Proof\n<JCS(signing object)>
   "txRef": "<txRef>",
   "from": "<from address>",
   "resource": { /* top-level resource object */ },
-  "accepted": { /* top-level accepted object */ }
+  "accepted": { /* top-level accepted object, including extra.assetTransferMethod */ }
 }
 ```
 
@@ -420,44 +488,24 @@ x402 Payment Proof\n<JCS(signing object)>
 
 Although the signing object is not transmitted verbatim, it is fully and deterministically derived from fields already present in the message, consistent with established protocol patterns such as EIP-712 and TLS transcript signing.
 
-**3.3.3 Network Profiles and Future Direction**
+---
 
-TXID is designed to be network-agnostic. The core specification defines invariants that apply across all networks:
+## 4. Verification Logic
 
-- `payload.type = "txid"` as the discriminator
-- Signature binding of `txRef` to payment terms
-- `txRef` reservation and consumption for replay protection
-- Transfer validation against payment terms
-
-The EVM and Solana specifics in sections 3.3.2.1 and 3.3.2.2 will be moved to separate network profile documents (e.g., `txid-evm.md`, `txid-solana.md`) as the specification matures. Future networks will require additional profile documents that define:
-
-- The (network, format, alg) tuple for that network
-- Field encoding rules (address formats, `txRef` canonicalization)
-- Signature verification procedures
-- Network-specific transaction resolution
-
-This separation allows new networks to be supported without modifying core TXID semantics. Implementations MUST reject unsupported (network, format, alg) combinations.
-
-**Note on `txRef`**: The `txRef` field is opaque to the core TXID specification. It must be uniquely resolvable given the `network` value, allowing the verifier to locate the on-chain transaction and extract the payer and transfer details. The exact format and canonicalization rules for `txRef` are defined by network profiles.
-
-**Note on Resource Server Responsibility**: Resource servers SHOULD only advertise payment requirements for networks and payload types they can verify. The server determines which payment mechanisms it accepts, and MUST be confident in its ability to verify proofs for any (network, format, alg) combination it advertises in the `accepts` array.
-
-**3.4 Payload Verification**
-
-When a resource server receives a TXID payment proof from a client, it MUST perform the verification procedure (described below) before delivering the requested service. The resource server MAY implement this verification by interfacing with a **facilitator service** or MAY self-host the verification logic. x402 defines two REST APIs for facilitators and this section describes how these APIs can be used with TXID:
+When a resource server receives a TXID payment proof from a client, it MUST perform the verification procedure before delivering the requested service. The resource server may implement this verification by interfacing with a **facilitator service** or by self-hosting the verification logic directly (see Section 10, Self-Hosted Verification). x402 defines two REST APIs for facilitators:
 
 | Endpoint       | Purpose                                                                 | Required for TXID |
 | -------------- | ----------------------------------------------------------------------- | ----------------- |
 | `POST /verify` | Validates the payment proof                                             | **Required**      |
 | `POST /settle` | Ensures payment transactions are finalized                              | No                |
 
-**TXID vs EIP-3009**: Unlike EIP-3009 settlement—where the resource server calls both `/verify` (to validate the signature) and `/settle` (to execute the on-chain transfer)—TXID only requires `/verify`. The on-chain transfer has already been executed by the client, so there is no settlement transaction for the facilitator to submit. The `/settle` endpoint is available for resource servers that want explicit settlement tracking, but `/verify` alone is sufficient for TXID.
+**TXID vs EIP-3009/Permit2**: Unlike EIP-3009 and Permit2 — where the resource server calls both `/verify` (to validate the signature) and `/settle` (to execute the on-chain transfer) — TXID only requires `/verify`. The on-chain transfer has already been executed by the client, so there is no settlement transaction for the facilitator to submit. The `/settle` endpoint is available for resource servers that want explicit settlement tracking, but `/verify` alone is sufficient for TXID.
 
-**3.4.1 POST /verify**
+### 4.1 POST /verify
 
 Verifies a TXID payment proof. The resource server calls this endpoint with both the payment payload (from the client) and the original payment requirements (that the server issued).
 
-**3.4.1.1 Verify Request Example (v1)**
+#### 4.1.1 Verify Request Example (v1)
 
 ```json
 {
@@ -466,7 +514,7 @@ Verifies a TXID payment proof. The resource server calls this endpoint with both
     "scheme": "exact",
     "network": "eip155:1",
     "payload": {
-      "type": "txid",
+      "type": "payment-proof",
       "alg": "ES256K",
       "format": "eip712",
       "txRef": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
@@ -480,7 +528,10 @@ Verifies a TXID payment proof. The resource server calls this endpoint with both
         "resource": "https://api.example.com/premium-data",
         "description": "Access to premium market data",
         "mimeType": "application/json",
-        "maxTimeoutSeconds": 60
+        "maxTimeoutSeconds": 60,
+        "extra": {
+          "assetTransferMethod": "txid"
+        }
       },
       "signature": "0x1234567890abcdef..."
     }
@@ -494,12 +545,15 @@ Verifies a TXID payment proof. The resource server calls this endpoint with both
     "mimeType": "application/json",
     "payTo": "0x209693Bc6afc0C5328bA36FaF03C514EF312287C",
     "maxTimeoutSeconds": 60,
-    "asset": "native"
+    "asset": "native",
+    "extra": {
+      "assetTransferMethod": "txid"
+    }
   }
 }
 ```
 
-**3.4.1.2 Verify Request Example (v2)**
+#### 4.1.2 Verify Request Example (v2)
 
 ```json
 {
@@ -516,10 +570,13 @@ Verifies a TXID payment proof. The resource server calls this endpoint with both
       "amount": "10000",
       "asset": "native",
       "payTo": "0x209693Bc6afc0C5328bA36FaF03C514EF312287C",
-      "maxTimeoutSeconds": 60
+      "maxTimeoutSeconds": 60,
+      "extra": {
+        "assetTransferMethod": "txid"
+      }
     },
     "payload": {
-      "type": "txid",
+      "type": "payment-proof",
       "alg": "ES256K",
       "format": "eip712",
       "txRef": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
@@ -533,64 +590,63 @@ Verifies a TXID payment proof. The resource server calls this endpoint with both
     "amount": "10000",
     "asset": "native",
     "payTo": "0x209693Bc6afc0C5328bA36FaF03C514EF312287C",
-    "maxTimeoutSeconds": 60
+    "maxTimeoutSeconds": 60,
+    "extra": {
+      "assetTransferMethod": "txid"
+    }
   }
 }
 ```
 
-**3.4.1.3 Verification Steps**
+#### 4.1.3 Verification Steps
 
 The verification implementation performs the following steps. The `paymentRequirements` object is provided by the resource server and represents the original payment terms.
 
 1. **Reserve the txRef (atomic)**
-   - Atomically attempt to reserve `paymentPayload.payload.txRef`
-   - If `txRef` is already reserved or consumed, reject immediately
+   - Atomically attempt to reserve the tuple `(network, txRef)` where `network` is from the payment requirements and `txRef` is `paymentPayload.payload.txRef`
+   - If `(network, txRef)` is already reserved or consumed, reject immediately
    - This MUST happen first to prevent race conditions where concurrent requests with the same proof could both proceed past this check
    - If any subsequent step fails, release the reservation
 
-2. **Validate payload type**
-   - `paymentPayload.payload.type` MUST be `"txid"`
-
-3. **Validate signature format matches network**
+2. **Validate signature format matches network**
    - `paymentPayload.payload.format` MUST be `eip712` for EVM networks, `solana-signmessage` for Solana
    - `paymentPayload.payload.alg` MUST be `ES256K` for EVM, `Ed25519` for Solana
 
-4. **Construct the signing object**
+3. **Construct the signing object**
    - **For v1**: Construct `{ "txRef": <txRef>, "from": <from>, "offer": <payload.offer> }`
    - **For v2**: Construct `{ "txRef": <txRef>, "from": <from>, "resource": <top-level resource>, "accepted": <top-level accepted> }`
 
-5. **Verify the payment proof signature**
+4. **Verify the payment proof signature**
    - **For EVM (EIP-712)**: Encode the signing object as EIP-712 typed data (do NOT use JCS). Compute the EIP-712 hash. Use `ecrecover` with the hash and `paymentPayload.payload.signature` to recover the signer address. The recovered address MUST match `paymentPayload.payload.from`.
    - **For Solana (JCS-based)**: Canonicalize the signing object using JCS (RFC 8785), UTF-8 encode with prefix. Decode `paymentPayload.payload.from` to get the public key. Verify `paymentPayload.payload.signature` against the hash using `ed25519_verify`. Verification MUST succeed.
 
-6. **Validate payment terms binding**
-   - **For v1**: Compare `paymentPayload.payload.offer` against the `paymentRequirements` provided by the resource server
-   - **For v2**: Compare the top-level `accepted` object against the payment requirements
-   - Comparison is field-by-field for payment-relevant fields: `scheme`, `network`, `asset`, `payTo`, `amount`/`maxAmountRequired`, `maxTimeoutSeconds`
-   - For v1, also compare: `resource`, `description`, `mimeType`
-   - Unknown or additional fields in either object are ignored for forward compatibility
-   - All compared fields MUST match exactly (case-sensitive string comparison)
+5. **Validate payment terms binding**
+   - **For v1**: `paymentPayload.payload.offer` MUST match the `paymentRequirements` provided by the resource server
+   - **For v2**: The top-level `accepted` object MUST match the payment requirements
+   - `extra.assetTransferMethod` MUST be `"txid"`
+   - `resource` MUST match the expected resource identifier
+   - Payment-relevant fields (`network`, `asset`, `payTo`, amount) MUST match
 
-7. **Fetch and validate the on-chain transaction**
+6. **Fetch and validate the on-chain transaction**
    - Locate the transaction identified by `paymentPayload.payload.txRef`
    - Transaction MUST be confirmed to the required confirmation depth
    - Transaction payer/authority (e.g., `tx.from` on EVM, or the equivalent payer/authority account on other networks) MUST match `paymentPayload.payload.from`
 
-8. **Validate the payment transfer against payment terms**
+7. **Validate the payment transfer against payment terms**
    - Transaction MUST have transferred at least the amount specified in `paymentRequirements.maxAmountRequired` (v1) or `accepted.amount` (v2)
    - Asset MUST match `paymentRequirements.asset` (v1) or `accepted.asset` (v2)
    - Transfer recipient MUST match `paymentRequirements.payTo` (v1) or `accepted.payTo` (v2)
    - Transaction timestamp MUST be within the retention window (see Replay and Idempotency Requirements)
 
-9. **Mark txRef as consumed**
-   - If all checks pass, mark the reserved `txRef` as permanently consumed
-   - The `txRef` record is subject to the retention policy
+8. **Mark txRef as consumed**
+   - If all checks pass, mark the reserved `(network, txRef)` as permanently consumed
+   - The `(network, txRef)` record is subject to the retention policy
 
 TXID deliberately leaves finality determination to the resource server; implementations MUST define and apply a network-specific confirmation or finality policy before delivering service.
 
-**3.4.1.4 /verify Response**
+#### 4.1.4 /verify Response
 
-The facilitator /verify API MUST respond with either 'success' or 'error' depending on the verification result.
+The facilitator /verify API MUST respond with either success or error depending on the verification result.
 
 **Successful Response:**
 
@@ -611,44 +667,17 @@ The facilitator /verify API MUST respond with either 'success' or 'error' depend
 }
 ```
 
-**3.4.2 POST /settle**
+### 4.2 POST /settle
 
 For TXID, the `/settle` endpoint is optional. The on-chain transaction has already been executed by the client, so there is no settlement transaction for the facilitator to submit.
 
-Resource servers MAY implement `/settle` for TXID as an internal operation (e.g., logging, tracking prepaid balances, or finalizing service delivery), but it is not required since `/verify` is sufficient. For TXID, `/settle` MUST NOT broadcast or construct an on-chain transaction; it may only record or acknowledge a previously verified payment.
+Resource servers MAY implement `/settle` for TXID as an internal operation (e.g., logging, tracking prepaid balances, or finalizing service delivery), but it is not required since `/verify` is sufficient.
 
-**3.5 Payment Payload Response**
+---
 
-After successful verification, the resource server delivers the requested resource to the client—the service or data the client paid for. The response format is defined by the resource server, not by this specification.
+## 5. TXID Properties
 
-**Success example:**
-
-```
-HTTP/1.1 200 OK
-Content-Type: application/json
-
-{
-  "data": { ... }  // The actual resource content the client paid for
-}
-```
-
-**Verification failure example:**
-
-```
-HTTP/1.1 402 Payment Required
-Content-Type: application/json
-
-{
-  "error": "payment_not_found",
-  "accepts": [ ... ]  // Payment requirements for retry
-}
-```
-
-TXID defines how payment verification works. Once payment is verified, the resource server delivers whatever service the client paid for according to the resource's own response format.
-
-**4. TXID Properties**
-
-TXID has the following defining properties:
+The TXID asset transfer method has the following defining properties:
 
 - **Payer-executed on-chain transfer**
   The payer submits the on-chain transaction that moves funds.
@@ -665,90 +694,125 @@ TXID has the following defining properties:
 - **Client Identity**
   The **payer** that actually funded the on-chain transfer referenced by `txRef` (i.e., the transaction sender or equivalent chain-specific payer/authority) also provides the payment proof signature. This essentially ties the identity of the client to the payer.
 
-**5. Replay and Idempotency Requirements**
+---
+
+## 6. Replay and Idempotency Requirements
 
 Because TXID relies on a transaction reference rather than a one-time on-chain authorization primitive, replay protection for **service delivery** is essential.
 
-**5.1 Responsibility**
+### 6.1 Responsibility
 
-The **resource server** is ultimately responsible for ensuring correct payment verification before delivering service—it is the party providing the service and booking the revenue. The x402 specification integrates a facilitator service, but this delegation does not transfer responsibility. If the resource server uses a facilitator, it is responsible for choosing a trustworthy facilitator and ensuring the facilitator implements the required behavior correctly.
+The **resource server** is ultimately responsible for ensuring correct payment verification before delivering service — it is the party providing the service and booking the revenue. The x402 specification integrates a facilitator service, but this delegation does not transfer responsibility. If the resource server uses a facilitator, it is responsible for choosing a trustworthy facilitator and ensuring the facilitator implements the required behavior correctly.
 
-**5.2 Replay Scope and Consequences**
+### 6.2 Replay Scope and Consequences
 
-Replay of TXID payment proofs can only result in duplicate service delivery. Replay cannot cause additional fund transfers without payer consent—the on-chain transaction has already been executed and cannot be replayed on-chain.
+Replay of TXID payment proofs can only result in duplicate service delivery. Replay cannot cause additional fund transfers without payer consent — the on-chain transaction has already been executed and cannot be replayed on-chain.
 
-**5.3 Required Behavior**
+### 6.3 Required Behavior
 
 For the **exact** payment scheme (one payment = one service delivery), the verification implementation (whether self-hosted or via facilitator) MUST:
 
 1. **De-duplicate by transaction reference**
-   A given `txRef` MUST be accepted at most once for successful service authorization. Facilitators MUST track consumed `txRef` values and MUST reject reuse of `txRef` values. Facilitators MUST mark `txRef` as consumed before returning success.
+   A given `(network, txRef)` tuple MUST be accepted at most once for successful service authorization. Facilitators MUST track consumed `(network, txRef)` values and MUST reject reuse. Facilitators MUST mark `(network, txRef)` as consumed before returning success.
 
 2. **Enforce retention window**
-   Define a retention window `T` (e.g., 1–24 hours) for storing consumed `txRef` values. The facilitator MUST reject any `txRef` whose on-chain timestamp is older than `T` relative to verification time.
+   Define a retention window `T` (e.g., 1–24 hours) for storing consumed `(network, txRef)` values. The retention window MUST be at least as long as `maxTimeoutSeconds`. The facilitator MUST reject any `txRef` whose on-chain timestamp is older than `T` relative to verification time. Resource servers MAY extend retention beyond `maxTimeoutSeconds` based on their own service delivery or dispute policies.
 
 **Note**: Other payment schemes (e.g., `deferred`, `prepaid`) may define different replay semantics where a single `txRef` can authorize multiple service deliveries by tracking and decrementing a balance. Such schemes are outside the scope of this specification.
 
-**6. Transport Security**
+---
+
+## 7. Transport Security
 
 TXID payment proofs MUST be transmitted over a secure, authenticated transport (e.g., HTTPS). Payment proofs MUST NOT be transmitted over cleartext or unauthenticated channels.
 
 TXID's resistance to service theft relies on the payment proof remaining off-chain and private. Because TXID payment proofs are bearer-like at the application layer (a valid proof can be replayed unless the facilitator enforces idempotency), transport-layer security is essential.
 
-**7. TXID Security Posture**
+---
 
-**7.1 Strengths**
+## 8. Security Posture
+
+### 8.1 Strengths
 
 - **Broad asset and chain support**: does not require specialized token contract interfaces.
 - **No facilitator gas requirement**: payer submits the transaction and pays network fees.
 - **Private proof delivery** (transport-protected): the payment proof is not inherently published on-chain as structured authorization data.
-- **No additional fund transfer risk**: replay of payment proofs cannot cause additional fund transfers—only duplicate service delivery.
+- **No additional fund transfer risk**: replay of payment proofs cannot cause additional fund transfers — only duplicate service delivery.
 
-**7.2 Tradeoffs**
+### 8.2 Tradeoffs
 
 - **Facilitator-side replay risk for service delivery**: facilitators must implement `txRef` de-duplication and time-window enforcement.
 - **Indexing/lookup dependency**: verification requires reliable access to chain transaction data and transfer parsing.
 - **Proof format complexity**: multi-format signature verification introduces algorithm and canonicalization risks that must be constrained by whitelists and strict encoding rules.
 
-**7.3 Responsibility and Risk**
+### 8.3 Responsibility and Risk
 
 TXID security depends on correct facilitator implementation. Facilitators choose their own risk tolerance for reorgs, replay windows, and storage duration. Incorrect implementation can cause duplicate service delivery but cannot cause unauthorized fund transfers.
 
-**8. Use Cases (Informative)**
+---
 
-TXID addresses several important use cases that are difficult or impossible with authorization-based settlement mechanisms like EIP-3009.
+## 9. Use Cases (Informative)
 
-**8.1 Economically Truthful Payment Model**
+TXID addresses several important use cases that are difficult or impossible with authorization-based asset transfer methods like EIP-3009 and Permit2.
 
-With EIP-3009 settlement, the facilitator submits the on-chain transaction and pays gas fees—even though the facilitator typically does not receive the payment revenue. This creates an economic mismatch where facilitators must subsidize gas costs or pass them on indirectly.
+### 9.1 Economically Truthful Payment Model
+
+With EIP-3009, the facilitator submits the on-chain transaction and pays gas fees — even though the facilitator typically does not receive the payment revenue. This creates an economic mismatch where facilitators must subsidize gas costs or pass them on indirectly.
 
 TXID eliminates this mismatch: the payer submits the transaction and pays gas directly. The facilitator only performs verification, which requires no on-chain transaction and no gas expenditure. This aligns costs with the party who benefits from the service.
 
-**8.2 Native Token Payments**
+### 9.2 Native Token Payments
 
 TXID allows payers to use native tokens (ETH, SOL, etc.) to pay for both:
 - the x402 service itself, and
 - the gas/transaction fees required to execute the payment.
 
-With EIP-3009, payments are limited to tokens that implement the `transferWithAuthorization` interface. Native tokens cannot be used. TXID removes this limitation, enabling payments in any transferable asset.
+With EIP-3009 and Permit2, payments are limited to tokens that implement the respective interfaces. Native tokens cannot be used. TXID removes this limitation, enabling payments in any transferable asset.
 
-**8.3 Token Utility and Ecosystem Support**
+### 9.3 Token Utility and Ecosystem Support
 
-TXID enables any token to be used for x402 payments, bringing additional utility and demand to tokens that may not have EIP-3009 support. This is particularly valuable for:
+TXID enables any token to be used for x402 payments, bringing additional utility and demand to tokens that may not have EIP-3009 or Permit2 support. This is particularly valuable for:
 - tokens that fund decentralized projects or DAOs,
 - community tokens that want to enable real-world utility,
 - newer tokens that haven't implemented authorization-based transfer interfaces.
 
 For example, a project like OMA3 (the author of this specification) would be able to accept x402 payments in the native token of its OMAChain Ethereum rollup.
 
-**8.4 Simplified Multi-Chain Support**
+### 9.4 Simplified Multi-Chain Support
 
-With authorization-based settlement, each blockchain/VM requires a specific signed-transfer standard (EIP-3009 for EVM, SPL Token extensions for Solana, etc.). Resource servers must implement and maintain verification logic for each standard.
+With authorization-based asset transfer methods, each blockchain/VM requires a specific signed-transfer standard (EIP-3009 for EVM, SPL Token extensions for Solana, etc.). Resource servers must implement and maintain verification logic for each standard.
 
 TXID simplifies multi-chain support: the core verification logic (signature verification + on-chain transaction lookup) follows the same pattern across chains. Resource servers can more easily support a wide range of VMs without requiring each chain to implement a specific authorization-based transfer mechanism.
 
-**9. Version History**
+---
 
-| Version | Date       | Changes                                                                 | Author     |
-| ------- | ---------- | ----------------------------------------------------------------------- | ---------- |
-| v0.1    | 2025-12-18 | Initial draft                                                           | Alfred Tom |
+## 10. Design Rationale: Why Payer-Submitted Transactions
+
+An alternative design was considered where the client would sign a transaction offline and send it to the facilitator, who would then broadcast it on-chain — similar to how EIP-3009 and Permit2 work. This was rejected primarily due to **nonce synchronization**.
+
+On EVM and most account-based chains, every transaction from an account must include a sequential nonce. If the client signs a transaction with nonce N and sends it to the facilitator for broadcast, but the client also independently submits a different transaction using the same nonce N (because the client's wallet is unaware of the facilitator-held transaction), whichever transaction gets mined first consumes nonce N. The other transaction becomes permanently invalid.
+
+This creates a fragile coupling between the client's general wallet activity and their x402 payment flow. The client would need to either:
+- freeze all other wallet activity until the facilitator broadcasts, or
+- coordinate nonce allocation with the facilitator in real time.
+
+Neither is practical, especially for active wallets or automated agents making frequent transactions.
+
+By having the client submit the transaction directly, TXID avoids this entirely. The client manages their own nonces through their own wallet, and the facilitator only needs to verify the result — not participate in transaction construction or submission.
+
+### Self-Hosted Verification
+
+In x402, the facilitator has always been an optional component. Resource servers can host the facilitator endpoints (`/verify`, `/settle`) themselves rather than delegating to a third party. TXID makes this even more natural.
+
+With authorization-based asset transfer methods (EIP-3009, Permit2), a third-party facilitator provides real value: it pays for gas, submits on-chain transactions, and handles blockchain interaction complexity on behalf of the resource server. With TXID, the facilitator submits no transactions and pays no gas — it only performs verification by reading chain state and checking signatures. This is logic that any resource server can implement directly without specialized blockchain infrastructure.
+
+Resource servers that self-host verification eliminate the trust dependency on a third party, reduce latency by removing a network hop, and retain full control over their replay protection and transaction acceptance policies.
+
+---
+
+## 11. Version History
+
+| Version | Date       | Changes                                                                                 | Author     |
+| ------- | ---------- | --------------------------------------------------------------------------------------- | ---------- |
+| v0.1    | 2025-12-18 | Initial draft                                                                           | Alfred Tom |
+| v0.2    | 2026-03-28 | Migrate to `extra.assetTransferMethod` and restructure to match scheme spec conventions | Alfred Tom |
