@@ -2,9 +2,9 @@
 
 ## Summary
 
-The `auth-hints` extension provides scheme-level authentication hints within x402 payment requirements. It enables clients to discover authentication requirements for specific payment schemes and complete registration and token acquisition *before* submitting a payment payload, avoiding an unnecessary round trip.
+The `auth-hints` extension provides authentication hints for specific payment requirements within x402. It enables clients to discover which `accepts[]` entries require authentication and complete registration and token acquisition *before* submitting a payment payload, avoiding an unnecessary round trip.
 
-This extension addresses a specific gap: when a `402 Payment Required` response includes multiple payment schemes and only some of them require authentication, the client needs a way to know which schemes require auth and how to obtain credentials — before committing to a scheme.
+This extension addresses a specific gap: when a `402 Payment Required` response includes multiple payment requirements and only some of them require authentication, the client needs a way to know which entries require auth and how to obtain credentials — before committing to a payment method.
 
 This is a **Server ↔ Client** extension. The Facilitator is not involved in authentication.
 
@@ -16,9 +16,9 @@ On an HTTP transport, the `WWW-Authenticate` header (RFC 9110) is the standard m
 
 | Scenario               | `WWW-Authenticate` | `auth-hints` extension | Meaning                                                                                                     |
 |------------------------|--------------------|------------------------|-------------------------------------------------------------------------------------------------------------|
-| Resource requires auth | Present            | Absent                 | Auth is mandatory for all schemes. Standard HTTP flow.                                                      |
-| Scheme requires auth   | Absent             | Present                | Auth is required only for specific schemes. Client uses extension hints.                                    |
-| Both                   | Present            | Present                | Auth is mandatory for the resource AND the extension provides scheme-specific hints (e.g. different scopes).|
+| Resource requires auth | Present            | Absent                 | Auth is mandatory for all payment requirements. Standard HTTP flow.                                         |
+| Entry requires auth    | Absent             | Present                | Auth is required only for specific `accepts[]` entries. Client uses extension hints.                        |
+| Both                   | Present            | Present                | Auth is mandatory for the resource AND the extension provides entry-specific hints (e.g. different scopes). |
 | Neither                | Absent             | Absent                 | No authentication required.                                                                                 |
 
 ---
@@ -27,10 +27,10 @@ On an HTTP transport, the `WWW-Authenticate` header (RFC 9110) is the standard m
 
 x402 is fully compatible with existing authentication mechanisms without this extension. Authentication and payment are parallel concerns- authentication identifies the client, payment authorizes the transfer of value.
 
-When a resource server requires authentication, either for the resource itself or for a specific payment scheme, the client can discover this through standard HTTP challenge mechanisms:
+When a resource server requires authentication, the client can discover this through standard HTTP challenge mechanisms:
 
 1. The server returns a `402 Payment Required` response. If authentication is required for the resource, the server includes a `WWW-Authenticate` header on this response.
-2. If the client selects a payment scheme that requires authentication and submits a `PaymentPayload` without credentials, the server responds with `401 Unauthorized` and a `WWW-Authenticate` header.
+2. If the client submits a `PaymentPayload` without credentials, the server responds with `401 Unauthorized` and a `WWW-Authenticate` header.
 3. The client discovers the authorization server via `WWW-Authenticate` parameters or RFC 8414 (OAuth 2.0 Authorization Server Metadata).
 4. The client registers via RFC 7591 (Dynamic Client Registration) if needed, obtains a token from the token endpoint, and retries with both authentication credentials and the payment payload.
 
@@ -44,7 +44,7 @@ DPoP: <proof-jwt>
 PAYMENT-SIGNATURE: <base64-encoded-payment-payload>
 ```
 
-Schema-based authorization without hints works but requires an extra round trip when the client doesn't know upfront that a scheme requires authentication. The `auth-hints` extension eliminates this by providing the authentication metadata in the `402` response.
+Authorization without hints works but requires an extra round trip when the client doesn't know upfront that a payment requirement requires authentication. The `auth-hints` extension eliminates this by providing the authentication metadata in the `402` response.
 
 On non-HTTP transports (MCP, A2A, etc.), the mechanism for discovering authentication requirements and presenting credentials is transport-specific. This specification defines behavior for HTTP. Other transports will define their own mechanisms in the future (see PaymentPayload below).
 
@@ -52,13 +52,13 @@ On non-HTTP transports (MCP, A2A, etc.), the mechanism for discovering authentic
 
 ## Authentication With Hints
 
-Some payment schemes require authentication even when the resource itself does not. For example, a `deferred` scheme uses off-chain vouchers against an escrow deposit, so the server needs to verify the client's identity to match vouchers to the correct escrow account and track accumulated value.  Without this extension, the client has no way to know which schemes require authentication until it tries and gets rejected. The `auth-hints` extension solves this by including authentication metadata in the `402` response, mapped to specific payment schemes.
+Some payment requirements require authentication even when the resource itself does not. For example, a `deferred` payment requirement uses off-chain vouchers against an escrow deposit, so the server needs to verify the client's identity to match vouchers to the correct escrow account and track accumulated value. Without this extension, the client has no way to know which `accepts[]` entries require authentication until it tries and gets rejected. The `auth-hints` extension solves this by including authentication metadata in the `402` response, mapped to specific `accepts[]` entries.
 
 ### PaymentRequired
 
-A resource server advertises scheme-level auth requirements by including the `auth-hints` extension in the `extensions` object of the `402 Payment Required` response.
+A resource server advertises auth requirements by including the `auth-hints` extension in the `extensions` object of the `402 Payment Required` response.
 
-The extension uses `schemeAuth` to map `accepts[]` entries to their authentication requirements.
+The extension uses `authRequirements` to map `accepts[]` entries to their authentication requirements.
 
 ```json
 {
@@ -90,10 +90,9 @@ The extension uses `schemeAuth` to map `accepts[]` entries to their authenticati
   "extensions": {
     "auth-hints": {
       "info": {
-        "schemeAuth": [
+        "authRequirements": [
           {
-            "acceptIndex": 1,
-            "scheme": "deferred",
+            "acceptIndexes": [1],
             "methods": [
               {
                 "type": "oauth2",
@@ -110,18 +109,15 @@ The extension uses `schemeAuth` to map `accepts[]` entries to their authenticati
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "properties": {
-          "schemeAuth": {
+          "authRequirements": {
             "type": "array",
             "items": {
               "type": "object",
               "properties": {
-                "acceptIndex": {
-                  "type": "integer",
-                  "description": "Index into the accepts[] array"
-                },
-                "scheme": {
-                  "type": "string",
-                  "description": "Payment scheme identifier for fallback matching"
+                "acceptIndexes": {
+                  "type": "array",
+                  "items": { "type": "integer" },
+                  "description": "Indexes into the accepts[] array"
                 },
                 "methods": {
                   "type": "array",
@@ -137,15 +133,11 @@ The extension uses `schemeAuth` to map `accepts[]` entries to their authenticati
                   }
                 }
               },
-              "required": ["methods"],
-              "anyOf": [
-                { "required": ["acceptIndex"] },
-                { "required": ["scheme"] }
-              ]
+              "required": ["acceptIndexes", "methods"]
             }
           }
         },
-        "required": ["schemeAuth"]
+        "required": ["authRequirements"]
       }
     }
   }
@@ -154,29 +146,22 @@ The extension uses `schemeAuth` to map `accepts[]` entries to their authenticati
 
 In this example, `accepts[0]` (exact) requires no authentication. `accepts[1]` (deferred) requires OAuth 2.0 with DPoP.
 
-#### `acceptIndex` and `scheme` Matching
+#### `acceptIndexes` Matching
 
-Each `schemeAuth` entry identifies which `accepts[]` entries it applies to via `acceptIndex`, `scheme`, or both. At least one MUST be present.
+Each `authRequirements` entry identifies which `accepts[]` entries it applies to via the `acceptIndexes` array. The array contains one or more integer indexes into the top-level `accepts[]` array.
 
-When resolving which auth requirements apply to a chosen `accepts[]` entry, clients SHOULD:
-1. If `acceptIndex` is present and in-range, use it (fast path)
-2. If `acceptIndex` is absent or out of range, fall back to matching by `scheme` name against an `accepts[]` entry's `scheme` field
-
-If both are present, `acceptIndex` takes precedence and `scheme` serves as the fallback. When both are present, the `scheme` value MUST match the `scheme` field of the referenced `accepts[acceptIndex]` entry. If they do not match, the client MUST treat the `schemeAuth` entry as invalid and ignore it.
+When resolving which auth requirements apply to a chosen `accepts[]` entry, clients check whether the chosen entry's index appears in any `authRequirements` entry's `acceptIndexes` array. Clients MUST silently ignore any index in `acceptIndexes` that is out of range for the `accepts[]` array.
 
 #### Server-Declared PaymentRequired Fields
 
-##### `schemeAuth[]`
+##### `authRequirements[]`
 
-| Field         | Type    | Required | Description                                                                                       |
-|---------------|---------|----------|---------------------------------------------------------------------------------------------------|
-| `acceptIndex` | integer | No*      | Index into the `accepts[]` array identifying which payment scheme requires auth                   |
-| `scheme`      | string  | No*      | Payment scheme identifier (e.g., `"exact"`). Applies to all `accepts[]` entries with this scheme. |
-| `methods`     | array   | Yes      | Supported authentication methods for this scheme. Client picks one.                               |
+| Field            | Type      | Required | Description                                                                                  |
+|------------------|-----------|----------|----------------------------------------------------------------------------------------------|
+| `acceptIndexes`  | integer[] | Yes      | Indexes into the `accepts[]` array identifying which payment requirements require auth    |
+| `methods`        | array     | Yes      | Supported authentication methods for these payment requirements. Client picks one.        |
 
-\* At least one of `acceptIndex` or `scheme` MUST be present.
-
-If a `schemeAuth` entry applies to a selected `accepts[]` entry, authentication is REQUIRED for use of that payment scheme. The hints are not advisory- they indicate a mandatory authentication step.
+If an `acceptIndexes` value applies to an `accepts[]` entry, authentication is REQUIRED for use of that payment requirement. The hints are not advisory- they indicate a mandatory authentication step.
 
 ##### Authentication Method Types
 
@@ -210,14 +195,14 @@ When a client encounters this method type, it MUST look at the `sign-in-with-x` 
 
 When a client receives a `402` response containing the `auth-hints` extension:
 
-1. The client evaluates all available payment schemes in `accepts[]`, including their authentication requirements from `schemeAuth`.
-2. The client selects a payment scheme based on its capabilities, preferences, and the authentication burden of each option.
-3. If the chosen scheme has a matching `schemeAuth` entry, the client completes the authentication flow before submitting the payment:
+1. The client evaluates all available payment requirements in `accepts[]`, including their authentication requirements from `authRequirements`.
+2. The client selects a payment requirement based on its capabilities, preferences, and the authentication burden of each option.
+3. If the chosen entry has a matching `authRequirements` entry, the client completes the authentication flow before submitting the payment:
    - For `oauth2`: register if needed and obtain an access token
    - For `sign-in-with-x`: sign the SIWX challenge per the `sign-in-with-x` extension specification
 4. The client submits the payment with both the authentication credentials and the x402 payment payload.
 
-If no `schemeAuth` entry exists for the chosen scheme, no authentication is needed for that scheme.
+If no `acceptIndexes` value exists for the chosen `accepts[]` entry, no authentication is needed.
 
 ### PaymentPayload
 
@@ -271,7 +256,7 @@ Authentication identity and payment identity are independent. The authenticated 
 
 ### Example Flow: OAuth 2.0 with DCR and DPoP
 
-This example walks through the complete flow on an HTTP transport when a client encounters a `deferred` scheme that requires OAuth 2.0 authentication with DPoP.
+This example walks through the complete flow on an HTTP transport when a client encounters a `deferred` payment requirement that requires OAuth 2.0 authentication with DPoP.
 
 #### Step 1 — Client Requests Resource
 
@@ -316,10 +301,9 @@ Content-Type: application/json
   "extensions": {
     "auth-hints": {
       "info": {
-        "schemeAuth": [
+        "authRequirements": [
           {
-            "acceptIndex": 1,
-            "scheme": "deferred",
+            "acceptIndexes": [1],
             "methods": [
               {
                 "type": "oauth2",
