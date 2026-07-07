@@ -384,6 +384,8 @@ For the optional `transaction` field, implementations MUST set unused fields to 
 7. Confirm `issuedAt` (from the payload) is within acceptable verifier policy
 8. If `transaction` is present, verifiers MAY check the blockchain to confirm the transaction exists
 
+When verifying a receipt outside the immediate x402 payment session (e.g., for reputation, auditing, or dispute resolution), verifiers SHOULD evaluate signer authorization as of the receipt's `issuedAt` time, not merely at the time of verification. Revocation or removal of a signing key from a mutable authorization source SHOULD be treated as prospective — it prevents future reliance on that key but does not by itself prove the key was unauthorized at `issuedAt`.
+
 
 **6. Protocol Integration Examples**
 
